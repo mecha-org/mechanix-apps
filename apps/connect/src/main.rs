@@ -1,8 +1,10 @@
 mod pages;
 mod settings;
-// mod custom_widgets;
 pub mod errors;
+mod server; 
+mod handlers;
 
+use async_trait::async_trait;
 use gtk::prelude::{BoxExt, GtkWindowExt};
 use pages::{
     app_info_page::{AppInfoOutput, AppInfoPage, Settings as AppInfoSettings},
@@ -18,15 +20,19 @@ use pages::{
     setup_failed_page::{Settings as SetupFailedSettings, SetupFailOutput, SetupFailedPage},
     setup_success_page::{Settings as SetupSuccessSettings, SetupSuccessOutput, SetupSuccessPage},
 };
-use relm4::gtk::glib::clone;
+use relm4::{gtk::glib::clone, component::{AsyncComponentParts, AsyncComponent, AsyncComponentController, AsyncController}, AsyncComponentSender};
 use relm4::{gtk, ComponentController};
-use relm4::{Component, ComponentParts, ComponentSender, Controller, RelmApp, SimpleComponent};
+use relm4::{Component, Controller, RelmApp};
 use settings::ScreenSettings;
-use std::fmt;
+use std::{fmt};
 use tracing::info;
 
 struct MechaConnectApp {
     current_page: Pages,
+    pages_stack: gtk::Stack,
+    link_machine_page: AsyncController<LinkMachinePage>,
+    check_internet_page: AsyncController<CheckInternetPage>,
+    configure_machine_page: AsyncController<ConfigureMachinePage>
 }
 
 #[derive(Debug)]
@@ -59,6 +65,7 @@ impl fmt::Display for Pages {
 #[derive(Debug)]
 enum Message {
     ChangeScreen(Pages),
+    // NextPressed
 }
 #[derive(Debug)]
 enum AppInput {}
@@ -78,12 +85,14 @@ fn init_window(settings: ScreenSettings) -> gtk::Window {
     window
 }
 
-impl SimpleComponent for MechaConnectApp {
+#[async_trait(?Send)]
+impl AsyncComponent for MechaConnectApp {
     type Input = Message;
     type Output = ();
     type Init = ();
     type Root = gtk::Window;
     type Widgets = AppWidgets;
+    type CommandOutput = Message;
 
     fn init_root() -> Self::Root {
         let settings = match settings::read_settings_yml() {
@@ -101,11 +110,12 @@ impl SimpleComponent for MechaConnectApp {
     }
 
     /// Initialize the UI and model.
-    fn init(
+    async fn init(
         _: Self::Init,
-        window: &Self::Root,
-        sender: ComponentSender<Self>,
-    ) -> relm4::ComponentParts<Self> {
+        window: Self::Root,
+        sender: AsyncComponentSender<Self>,
+    ) -> AsyncComponentParts<Self> {
+
         let settings = match settings::read_settings_yml() {
             Ok(settings) => settings,
             Err(_) => ScreenSettings::default(),
@@ -116,6 +126,11 @@ impl SimpleComponent for MechaConnectApp {
 
         let modules = settings.modules.clone();
         let widget_configs = settings.widget_configs.clone();
+
+
+        // // HERE grpc call
+
+        // let generate_code_data = get_provision_data().await;
 
         let app_info_page: Controller<AppInfoPage> = AppInfoPage::builder()
             .launch(AppInfoSettings {
@@ -139,7 +154,9 @@ impl SimpleComponent for MechaConnectApp {
                 sender.input_sender(),
                 clone!(@strong modules => move|msg| match msg {
                     CheckInternetOutput::BackPressed => Message::ChangeScreen(Pages::AppInfoPage),
-                    CheckInternetOutput::NextPressed => Message::ChangeScreen(Pages::NoInternetPage)
+                    CheckInternetOutput::LinkMachine => Message::ChangeScreen(Pages::LinkMachinePage),
+                    CheckInternetOutput::ConnectionNotFound => Message::ChangeScreen(Pages::NoInternetPage),
+                    CheckInternetOutput::ShowError => Message::ChangeScreen(Pages::SetupFailedPage),
                 }),
             );
 
@@ -152,6 +169,7 @@ impl SimpleComponent for MechaConnectApp {
                 sender.input_sender(),
                 clone!(@strong modules => move|msg| match msg {
                     PageOutput::BackPressed => Message::ChangeScreen(Pages::CheckInternetPage),
+                    // PageOutput::NextPressed => { return Message::NextPressed}
                     PageOutput::NextPressed => Message::ChangeScreen(Pages::LinkMachinePage)
                 }),
             );
@@ -163,7 +181,8 @@ impl SimpleComponent for MechaConnectApp {
             sender.input_sender(),
             clone!(@strong modules => move|msg| match msg {
                 LinkMachineOutput::BackPressed => Message::ChangeScreen(Pages::NoInternetPage),
-                LinkMachineOutput::NextPressed => Message::ChangeScreen(Pages::ConfigureMachinePage)
+                LinkMachineOutput::NextPressed => Message::ChangeScreen(Pages::ConfigureMachinePage),
+                LinkMachineOutput::ShowError => Message::ChangeScreen(Pages::SetupFailedPage),
             }),
         );
 
@@ -260,7 +279,8 @@ impl SimpleComponent for MechaConnectApp {
             Option::from(Pages::DeviceInfoPage.to_string().as_str()),
         );
 
-        let current_page = Pages::AppInfoPage;
+        let current_page = Pages::AppInfoPage;   // OG
+        // let current_page = Pages::LinkMachinePage;
 
         //Setting current active screen in stack
         pages_stack.set_visible_child_name(&current_page.to_string());
@@ -274,32 +294,75 @@ impl SimpleComponent for MechaConnectApp {
 
         vbox.append(&pages_stack);
 
-        let model = MechaConnectApp { current_page };
+        let model = MechaConnectApp { current_page, 
+            pages_stack:pages_stack.clone(),
+            link_machine_page,
+            check_internet_page,
+            configure_machine_page 
+        };
 
         window.set_child(Some(&vbox));
         let widgets = AppWidgets { pages_stack };
 
-        ComponentParts { model, widgets }
+        // ComponentParts { model, widgets }
+        AsyncComponentParts { model, widgets }
     }
 
-    fn update(&mut self, message: Self::Input, sender: ComponentSender<Self>) {
+    async fn update(
+        &mut self,
+        message: Self::Input,
+        _sender: AsyncComponentSender<Self>,
+        _root: &Self::Root,
+    ) {
         println!("{:?}", message);
-        match message {
-            Message::ChangeScreen(page) => {
-                self.current_page = page;
+
+        match message {Message::ChangeScreen(page)=>{
+            __self.current_page=page;
+
+            match self.current_page {
+                Pages::AppInfoPage => {},
+                Pages::CheckInternetPage => {
+                    let _ = __self.check_internet_page.sender().send(pages::check_internet_page::InputMessage::ActiveScreen(self.current_page.to_string()));
+                },
+                Pages::NoInternetPage => {},
+                Pages::LinkMachinePage => {
+                    println!("THIS  IS  link_machine_page : {:?} ", self.current_page);
+
+                    // active screen
+                    // let _ = __self.link_machine_page.sender().send(pages::link_machine_page::InputMessage::ActiveScreen(self.current_page));
+
+                    let _ = __self.link_machine_page.sender().send(pages::link_machine_page::InputMessage::ActiveScreen(self.current_page.to_string()));
+                },
+                Pages::ConfigureMachinePage => {
+                    println!("ConfigureMachinePage ");
+                    let _ = __self.configure_machine_page.sender().send(pages::configure_machine_page::InputMessage::ActiveScreen(self.current_page.to_string()));
+                },
+                Pages::SetupSuccessPage => {},
+                Pages::SetupFailedPage => {},
+                Pages::DeviceInfoPage => {},
             }
+                        
+
+          
+
+            // let _ = __self.link_machine_page.sender().send(pages::link_machine_page::InputMessage::GenerateCodeRequest);
+        
+        
         }
+
+     }
     }
 
-    fn update_view(&self, widgets: &mut Self::Widgets, sender: ComponentSender<Self>) {
+    fn update_view(&self, widgets: &mut Self::Widgets, _sender: AsyncComponentSender<Self>) {
         widgets
             .pages_stack
             .set_visible_child_name(self.current_page.to_string().as_str());
     }
 }
 
-fn main() {
+#[tokio::main]
+async fn main() {
     let app = RelmApp::new("mecha.connect.app");
 
-    app.run::<MechaConnectApp>(());
+    app.run_async::<MechaConnectApp>(());
 }

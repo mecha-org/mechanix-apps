@@ -1,5 +1,6 @@
+use async_trait::async_trait;
 use gtk::prelude::*;
-use relm4::{gtk::{self, prelude::{WidgetExt, ButtonExt}, Button, glib::clone}, ComponentParts, ComponentSender, SimpleComponent};
+use relm4::{component::{AsyncComponent, AsyncComponentParts}, gtk::{self, prelude::{WidgetExt, ButtonExt}, Button, glib::clone}, AsyncComponentSender, ComponentParts, ComponentSender, SimpleComponent};
 use crate::settings::{Modules, WidgetConfigs};
 use custom_utils::{get_gif_from_path, get_image_from_path};
 
@@ -24,16 +25,23 @@ pub enum ConfigureOutput {
     NextPressed
 }
 
+#[derive(Debug)]
+pub enum InputMessage {
+    ActiveScreen(String),
+}
+
 pub struct AppWidgets {
 }
 
-impl SimpleComponent for ConfigureMachinePage {
+#[async_trait(?Send)]
+impl AsyncComponent for ConfigureMachinePage {
 
     type Init = Settings;
-    type Input = ();
+    type Input = InputMessage;
     type Output = ConfigureOutput;
     type Root = gtk::Box;
     type Widgets = AppWidgets;
+    type CommandOutput = ();
 
     fn init_root() -> Self::Root {
         gtk::Box::builder()
@@ -41,11 +49,11 @@ impl SimpleComponent for ConfigureMachinePage {
     }
 
     /// Initialize the UI and model.
-    fn init(
+    async fn init(
         init: Self::Init,
-        root: &Self::Root,
-        sender: ComponentSender<Self>,
-    ) -> relm4::ComponentParts<Self> {
+        root: Self::Root,
+        sender: AsyncComponentSender<Self>,
+    ) -> AsyncComponentParts<Self> {
         let modules = init.modules.clone();
         let widget_configs = init.widget_configs.clone();
 
@@ -139,8 +147,21 @@ impl SimpleComponent for ConfigureMachinePage {
 
         let widgets = AppWidgets {  };
 
-        ComponentParts { model, widgets }
+        AsyncComponentParts { model, widgets }
+    }
+
+    async fn update(
+        &mut self,
+        message: Self::Input,
+        sender: AsyncComponentSender<Self>,
+        _root: &Self::Root,
+    ) { 
+
     }
 
   
 } 
+
+async fn init_services(sender: relm4::Sender<InputMessage>) { 
+
+}

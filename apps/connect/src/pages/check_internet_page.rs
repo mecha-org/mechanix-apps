@@ -1,14 +1,16 @@
-use crate::settings::{Modules, WidgetConfigs};
+use std::time::Duration;
+
+use crate::{server::provision_client::ProvisionManagerClient, settings::{Modules, WidgetConfigs}};
+use async_trait::async_trait;
 use custom_utils::{get_gif_from_path, get_image_from_path};
 use gtk::prelude::*;
 use relm4::{
-    gtk::{
+    component::{AsyncComponent, AsyncComponentParts}, gtk::{
         self,
         glib::clone,
         prelude::{ButtonExt, WidgetExt},
         Button,
-    },
-    ComponentParts, ComponentSender, SimpleComponent,
+    }, AsyncComponentSender
 };
 
 pub struct Settings {
@@ -20,33 +22,46 @@ pub struct CheckInternetPage {
 }
 
 #[derive(Debug)]
-enum AppInput {}
+enum AppInput {
+}
+
+#[derive(Debug)]
+pub enum InputMessage {
+    ActiveScreen(String),
+    NextScreen,
+    ConnectionNotFound,
+    ShowError
+}
 
 #[derive(Debug)]
 pub enum CheckInternetOutput {
     BackPressed,
-    NextPressed,
+    LinkMachine,
+    ConnectionNotFound,
+    ShowError
 }
 
 pub struct AppWidgets {}
 
-impl SimpleComponent for CheckInternetPage {
+#[async_trait(?Send)]
+impl AsyncComponent for CheckInternetPage {
     type Init = Settings;
-    type Input = ();
+    type Input = InputMessage;
     type Output = CheckInternetOutput;
     type Root = gtk::Box;
     type Widgets = AppWidgets;
+    type CommandOutput = ();
 
     fn init_root() -> Self::Root {
         gtk::Box::builder().build()
     }
 
     /// Initialize the UI and model.
-    fn init(
+    async fn init(
         init: Self::Init,
-        root: &Self::Root,
-        sender: ComponentSender<Self>,
-    ) -> relm4::ComponentParts<Self> {
+        root: Self::Root,
+        sender: AsyncComponentSender<Self>,
+    ) -> AsyncComponentParts<Self> {
         let modules = init.modules.clone();
         let widget_configs = init.widget_configs.clone();
 
@@ -106,7 +121,7 @@ impl SimpleComponent for CheckInternetPage {
         next_button.add_css_class("footer-container-button");
 
         next_button.connect_clicked(clone!(@strong sender => move |_| {
-          let _ =  sender.output(CheckInternetOutput::NextPressed);
+          let _ =  sender.output(CheckInternetOutput::LinkMachine);
         }));
 
         back_button_box.append(&back_button);
@@ -120,6 +135,59 @@ impl SimpleComponent for CheckInternetPage {
 
         let widgets = AppWidgets {};
 
-        ComponentParts { model, widgets }
+        AsyncComponentParts { model, widgets }
     }
+
+    async fn update(
+        &mut self,
+        message: Self::Input,
+        sender: AsyncComponentSender<Self>,
+        _root: &Self::Root,
+    ) { 
+        match message {
+            InputMessage::ActiveScreen(text) => {
+                println!("active screen: {:?}", text);
+                let sender: relm4::Sender<InputMessage> = sender.input_sender().clone();
+                let _ = init_services(sender).await;
+            },
+            InputMessage::NextScreen => {
+                let _ =  sender.output(CheckInternetOutput::LinkMachine);
+            },
+            InputMessage::ConnectionNotFound => {
+                let _ =  sender.output(CheckInternetOutput::ConnectionNotFound);
+            }
+            InputMessage::ShowError => {
+                let _ =  sender.output(CheckInternetOutput::ShowError);
+            }
+        }
+        
+    }
+}
+
+async fn init_services(sender: relm4::Sender<InputMessage>) {
+    println!("init services called...");
+
+    let time_duration=Duration::from_millis(7000);
+    let _ = tokio::time::sleep(time_duration);
+
+    match ProvisionManagerClient::new().await {
+        Ok(mut client) => {
+            match client.ping().await {
+                Ok(response) => {
+                    println!("ping response {:?} ", response);
+                   if response.code == "success" {
+                    let _ = sender.send(InputMessage::NextScreen);
+                   }
+                   else {
+                    let _ = sender.send(InputMessage::ConnectionNotFound);
+                   }
+                },
+                Err(error) => eprintln!("ping error: {}", error)
+            }
+        },
+        Err(error) => {
+            println!("Client error :: {} ", error);
+            // server connection refused! - Handler error screen
+        }
+    };
 }

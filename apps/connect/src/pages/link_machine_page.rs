@@ -1,7 +1,8 @@
-use crate::settings::WidgetConfigs;
+use async_trait::async_trait;
 use custom_utils::get_image_from_path;
 use gtk::prelude::*;
 use relm4::{
+    component::{AsyncComponent, AsyncComponentParts},
     gtk::{
         self,
         gdk::Display,
@@ -9,8 +10,14 @@ use relm4::{
         prelude::{ButtonExt, WidgetExt},
         Button, CssProvider, STYLE_PROVIDER_PRIORITY_APPLICATION,
     },
-    ComponentParts, ComponentSender, SimpleComponent,
+    AsyncComponentSender,
 };
+use tokio::sync::oneshot;
+use std::time::{Duration, Instant};
+
+use crate::{handlers::provision::handler::LinkMachineHandler,settings::WidgetConfigs};
+
+// use crate::{services::provisionHandler::ProvisionHandler, settings::WidgetConfigs};
 
 pub struct Settings {
     pub widget_configs: WidgetConfigs,
@@ -18,6 +25,12 @@ pub struct Settings {
 
 pub struct LinkMachinePage {
     settings: Settings,
+    connect_code: String,
+    timer: i32,
+    provision_status: bool,
+    progress: f64,
+    progress_angle: i32,
+    current_time: i32,
 }
 
 #[derive(Debug)]
@@ -30,16 +43,41 @@ enum AppInput {
 pub enum LinkMachineOutput {
     BackPressed,
     NextPressed,
+    ShowError
 }
 
-pub struct AppWidgets {}
+#[derive(Debug)]
+pub enum InputMessage {
+    ActiveScreen(String),
+    CodeChanged(String),
+    GenerateCodeError(String),
+    ProvisionSuccess,
+    ShowError(String),
+    TimeTick,
+}
 
-impl SimpleComponent for LinkMachinePage {
+pub struct AppWidgets {
+    connect_code_label: gtk::Label,
+    spinner: gtk::Spinner,
+    // timer_label: gtk::Label,
+    // time_bar: gtk::ProgressBar,
+}
+
+// //
+pub struct LinkMachineData {
+    pub generated_code: String,
+}
+
+const TIMER: i32 = 10;
+
+#[async_trait(?Send)]
+impl AsyncComponent for LinkMachinePage {
     type Init = Settings;
-    type Input = ();
+    type Input = InputMessage;
     type Output = LinkMachineOutput;
     type Root = gtk::Box;
     type Widgets = AppWidgets;
+    type CommandOutput = ();
 
     fn init_root() -> Self::Root {
         let provider = CssProvider::new();
@@ -53,14 +91,12 @@ impl SimpleComponent for LinkMachinePage {
         gtk::Box::builder().build()
     }
 
-    fn init(
+    async fn init(
         init: Self::Init,
-        root: &Self::Root,
-        sender: ComponentSender<Self>,
-    ) -> relm4::ComponentParts<Self> {
+        root: Self::Root,
+        sender: AsyncComponentSender<Self>,
+    ) -> AsyncComponentParts<Self> {
         let widget_configs = init.widget_configs.clone();
-
-        let model = LinkMachinePage { settings: init };
 
         let main_content_box = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
@@ -112,21 +148,36 @@ impl SimpleComponent for LinkMachinePage {
             .halign(gtk::Align::Start)
             .build();
 
-        let code_label = gtk::Label::builder()
-            .label("ABCD 1234")
-            .css_classes(["link-machine-code"])
-            .build();
-
-        let checking_code_icon = gtk::Spinner::builder()
-            .spinning(true)
+        // spinner
+        let spinner = gtk::Spinner::builder()
             .css_classes(["blue"])
             .height_request(30)
             .width_request(30)
             .build();
+        spinner.set_spinning(false);
 
-        code_label_box.append(&code_label);
+        // progressbar
+        let time_bar = gtk::ProgressBar::builder().build();
+        time_bar.style_context().add_class("time-progressbar");
+        time_bar.set_visible(false);
+
+        let connect_code_label = gtk::Label::builder()
+            .label("") // ABCD 1234
+            .css_classes(["link-machine-code"])
+            .build();
+
+        // let timer_label = gtk::Label::builder()
+        //     .label("")
+        //     .css_classes(["link-machine-code"])
+        //     .build();
+
+        // .css_classes(["link-machine-code", "custom-circle"])
+
+        code_label_box.append(&connect_code_label);
         main_code_box.append(&code_label_box);
-        main_code_box.append(&checking_code_icon);
+        main_code_box.append(&time_bar);
+        main_code_box.append(&spinner);
+        // main_code_box.append(&timer_label);
 
         main_content_box.append(&main_code_box);
 
@@ -261,8 +312,99 @@ impl SimpleComponent for LinkMachinePage {
 
         root.append(&main_content_box);
 
-        let widgets = AppWidgets {};
+        let model = LinkMachinePage {
+            settings: init,
+            connect_code: "".to_string(),
+            timer: TIMER,
+            provision_status: false,
+            progress: 0.0,
+            progress_angle: 0,
+            current_time: 0,
+        };
 
-        ComponentParts { model, widgets }
+        let widgets = AppWidgets {
+            connect_code_label,
+            spinner,
+            // time_bar,
+            // timer_label,
+        };
+
+        AsyncComponentParts { model, widgets }
     }
+
+    async fn update(
+        &mut self,
+        message: Self::Input,
+        sender: AsyncComponentSender<Self>,
+        _root: &Self::Root,
+    ) {
+        // println!("Inside update {:?}", message);
+        let seconds = Duration::from_secs(10);
+        let start = Instant::now();
+
+        match message {
+            InputMessage::ActiveScreen(text) => {
+                let sender: relm4::Sender<InputMessage> = sender.input_sender().clone();
+                let result = init_services(sender).await;
+            },
+            InputMessage::ProvisionSuccess => {
+             let _ =  sender.output(LinkMachineOutput::NextPressed);
+            },
+            InputMessage::CodeChanged(code) => {
+                println!("inside InputMessage code change");
+                self.connect_code = code.clone();
+            },
+            InputMessage::TimeTick => {
+                // let mut current_time = self.timer.clone();
+                // if current_time >= 0 {
+                //     if current_time == 0 {
+                //         current_time = TIMER.clone();
+                //         // // Generate code
+                //         let _ = sender.input_sender().send(InputMessage::GenerateCode);
+                //     }
+                //     current_time -= 1;
+                // }
+                // self.timer = current_time;
+                // // println!("NEW TIME {:?} & OG TIMER {:?}", self.timer, TIMER);
+
+                // println!("After TIme's up!! {:?} & {:?}", self.connect_code, self.timer);
+                // let _ = sender.input_sender().send(InputMessage::GenerateCode);
+
+                // if self.timer > 0 {
+                //     self.timer -= 1;
+                //     println!("Remaining Time: {:?}", self.timer);
+                // } else {
+                //     self.timer = TIMER.clone();
+                //     let _ = sender.input_sender().send(InputMessage::GenerateCode);
+                // }
+            },
+            InputMessage::GenerateCodeError(error) => {
+                println!("Generate code error: {:?} ", error);
+                println!("SHOW TOAST!");
+            },
+            InputMessage::ShowError(text) => {
+                println!("Error to be shown:: {:?} ", text);
+                let _ =  sender.output(LinkMachineOutput::ShowError);
+            }
+            
+        }
+    }
+
+    fn update_view(&self, widgets: &mut Self::Widgets, sender: AsyncComponentSender<Self>) {
+        println!("update_view {:?} ", self.connect_code);
+        widgets.connect_code_label.set_label(&self.connect_code);
+        widgets.spinner.set_spinning(true);
+
+    }
+  
+}
+
+async fn init_services(sender: relm4::Sender<InputMessage>) {
+    println!("init services called..."); 
+
+    let sender_clone_1 = sender.clone();
+    let mut link_machine_handler = LinkMachineHandler::new();
+    let _ = relm4::spawn_local(async move {
+        let _ = link_machine_handler.run(sender_clone_1).await;
+    });
 }

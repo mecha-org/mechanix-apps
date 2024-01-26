@@ -233,5 +233,36 @@
 }
 
 .blue {
-    color: #0071EB;
+    color: #2c2fec;
+}
+
+.gray {
+    color: #6e6e72;
+}
+
+.custom-circle {
+    min-width: 35px; 
+    min-height: 35px; 
+    border: 1px solid rgb(59, 61, 201); 
+    border-radius: 50%; 
+    margin: auto; 
+    background: conic-gradient(rgb(44, 47, 236) 40%, #eee 0);
+}
+
+.time-progressbar trough{
+    background-color:  #8da3ba;
+    border-radius: 50%;
+    min-width: 40px;
+    min-height: 40px; 
+    border: 4px solid #8da3ba; 
+}
+
+.time-progressbar trough progress{
+    border-radius: 50%;
+    min-width: 40px;
+    min-height: 40px; 
+}
+
+.custom-progress-bar trough progress{
+    background-color: blue; 
 }
